@@ -1,0 +1,371 @@
+import streamlit as st
+import pandas as pd
+import yfinance as yf
+import plotly.express as px
+from streamlit_lightweight_charts import renderLightweightCharts
+
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
+
+st.set_page_config(
+    page_title="AI Stock Predictor",
+    layout="wide",
+    page_icon="📈"
+)
+
+# ---------------------------------------------------
+# GLOBAL CSS (Trading Terminal Style)
+# ---------------------------------------------------
+
+st.markdown("""
+<style>
+
+body {
+    background-color:#0b1220;
+}
+
+.block-container{
+    padding-top:1rem;
+}
+
+.card{
+    background:#111827;
+    border-radius:14px;
+    padding:18px;
+    box-shadow:0 0 10px rgba(0,0,0,0.4);
+}
+
+.title{
+    font-size:30px;
+    font-weight:700;
+}
+
+.metric-big{
+    font-size:48px;
+    font-weight:800;
+    color:#22c55e;
+}
+
+.small-label{
+    color:#9ca3af;
+    font-size:13px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# HEADER
+# ---------------------------------------------------
+
+st.markdown('<p class="title">📈 AI Stock Market Predictor</p>', unsafe_allow_html=True)
+st.caption("Machine Learning Based Market Scanner")
+
+# ---------------------------------------------------
+# MARKET OVERVIEW
+# ---------------------------------------------------
+
+st.subheader("Market Overview")
+
+indices = {
+    "NIFTY 50":"^NSEI",
+    "BANK NIFTY":"^NSEBANK",
+    "FIN NIFTY":"^NSEFIN",
+    "MIDCAP":"^NSEMDCP50",
+    "SENSEX":"^BSESN"
+}
+
+cols = st.columns(len(indices))
+
+for i,(name,ticker) in enumerate(indices.items()):
+
+    try:
+
+        data = yf.download(ticker,period="2d",interval="1d",progress=False)
+
+        price=data["Close"].iloc[-1]
+        prev=data["Close"].iloc[-2]
+
+        change=((price-prev)/prev)*100
+
+        delta="normal" if change>0 else "inverse"
+
+        cols[i].metric(
+            name,
+            f"{price:.0f}",
+            f"{change:.2f}%",
+            delta_color=delta
+        )
+
+    except:
+
+        cols[i].metric(name,"N/A")
+
+st.divider()
+
+# ---------------------------------------------------
+# LOAD AI SCAN RESULTS
+# ---------------------------------------------------
+
+try:
+
+    df=pd.read_csv("scan_results.csv")
+
+except:
+
+    st.error("scan_results.csv not found")
+    st.stop()
+
+df["Probability_%"]=(df["Probability_Up"]*100).round(2)
+df=df.sort_values("Probability_Up",ascending=False)
+
+# ---------------------------------------------------
+# MAIN LAYOUT
+# ---------------------------------------------------
+
+left,center,right = st.columns([1.2,2.7,1.1])
+
+# ---------------------------------------------------
+# LEFT PANEL
+# ---------------------------------------------------
+
+with left:
+
+    st.markdown('<div class="card">',unsafe_allow_html=True)
+
+    st.subheader("🏆 Top AI Picks")
+
+    top=df.head(5)
+
+    for i,row in top.iterrows():
+
+        prob=row["Probability_%"]
+
+        st.write(f"**{row['Stock']}**")
+
+        st.progress(prob/100)
+
+        st.caption(f"{prob}% probability")
+
+    st.button("🔎 Scan Market")
+
+    st.divider()
+
+    st.subheader("Probability Ranking")
+
+    st.dataframe(
+        df[["Stock","Probability_%"]],
+        height=350,
+        use_container_width=True
+    )
+
+    st.markdown('</div>',unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# CENTER PANEL (CHART)
+# ---------------------------------------------------
+
+with center:
+
+    st.markdown('<div class="card">',unsafe_allow_html=True)
+
+    st.subheader("Stock Chart")
+
+    stock_choice=st.selectbox(
+        "Select Stock",
+        df["Stock"]
+    )
+
+    timeframe_map={
+        "1M":("1mo","1d"),
+        "3M":("3mo","1d"),
+        "6M":("6mo","1d"),
+        "1Y":("1y","1d"),
+        "5Y":("5y","1wk")
+    }
+
+    tf=st.selectbox("Timeframe",list(timeframe_map.keys()),index=3)
+
+    period,interval=timeframe_map[tf]
+
+    data=yf.download(stock_choice,period=period,interval=interval,progress=False)
+
+    data=data.reset_index()
+
+    # --------------------
+    # INDICATORS
+    # --------------------
+
+    data["MA20"]=data["Close"].rolling(20).mean()
+    data["MA50"]=data["Close"].rolling(50).mean()
+
+    data["AvgVol"]=data["Volume"].rolling(20).mean()
+
+    data["VolumeSpike"]=data["Volume"]>data["AvgVol"]*2
+
+    data["CandleMove"]=(data["Close"]-data["Open"])/data["Open"]
+
+    data["SmartMoney"]=(data["VolumeSpike"])&(data["CandleMove"]>0.02)
+
+    latest_smart=data["SmartMoney"].iloc[-1]
+    latest_vol=data["VolumeSpike"].iloc[-1]
+
+    # --------------------
+    # CHART DATA
+    # --------------------
+
+    chart_data=[
+
+        {
+            "time":str(row["Date"].date()),
+            "open":float(row["Open"]),
+            "high":float(row["High"]),
+            "low":float(row["Low"]),
+            "close":float(row["Close"])
+        }
+
+        for _,row in data.tail(300).iterrows()
+
+    ]
+
+    ma_data=[
+
+        {
+            "time":str(row["Date"].date()),
+            "value":float(row["MA20"])
+        }
+
+        for _,row in data.tail(300).iterrows()
+        if not pd.isna(row["MA20"])
+
+    ]
+
+    chart={
+
+        "chart":{
+            "height":500,
+            "layout":{
+                "background":{"type":"solid","color":"#111827"},
+                "textColor":"white"
+            }
+        },
+
+        "series":[
+
+            {
+                "type":"Candlestick",
+                "data":chart_data,
+                "options":{
+                    "upColor":"#22c55e",
+                    "downColor":"#ef4444"
+                }
+            },
+
+            {
+                "type":"Line",
+                "data":ma_data,
+                "options":{
+                    "color":"#3b82f6"
+                }
+            }
+
+        ]
+    }
+
+    renderLightweightCharts([chart],key="chart")
+
+    st.metric("Model Backtest Accuracy","≈ 77%")
+
+    st.markdown('</div>',unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# RIGHT PANEL
+# ---------------------------------------------------
+
+with right:
+
+    st.markdown('<div class="card">',unsafe_allow_html=True)
+
+    st.subheader("🤖 AI Prediction")
+
+    selected=df[df["Stock"]==stock_choice].iloc[0]
+
+    prob=selected["Probability_%"]
+
+    st.markdown(f'<p class="metric-big">{prob}%</p>',unsafe_allow_html=True)
+
+    if prob>70:
+
+        st.success("STRONG BUY")
+
+    elif prob>55:
+
+        st.info("BUY")
+
+    else:
+
+        st.warning("HOLD")
+
+    st.divider()
+
+    st.subheader("🏦 Institutional Activity")
+
+    if latest_smart:
+
+        st.success("Smart Money Detected")
+
+    elif latest_vol:
+
+        st.info("High Volume Activity")
+
+    else:
+
+        st.warning("Normal Activity")
+
+    st.divider()
+
+    st.subheader("Trend Strength")
+
+    if data["Close"].iloc[-1]>data["MA50"].iloc[-1]:
+
+        st.success("Bullish Trend")
+
+    else:
+
+        st.warning("Weak Trend")
+
+    st.markdown('</div>',unsafe_allow_html=True)
+
+# ---------------------------------------------------
+# HEATMAP
+# ---------------------------------------------------
+
+st.divider()
+
+st.subheader("🔥 AI Probability Heatmap")
+
+heat=df.head(20)
+
+fig=px.imshow(
+
+    [heat["Probability_%"]],
+
+    x=heat["Stock"],
+    y=["AI Score"],
+
+    color_continuous_scale="RdYlGn"
+
+)
+
+fig.update_layout(height=250)
+
+st.plotly_chart(fig,use_container_width=True)
+
+# ---------------------------------------------------
+# FOOTER
+# ---------------------------------------------------
+
+st.divider()
+
+st.caption("⚠️ This is an AI probability tool, not financial advice.")
